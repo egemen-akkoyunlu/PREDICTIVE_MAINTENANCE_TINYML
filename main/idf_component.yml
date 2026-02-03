@@ -1,0 +1,12 @@
+## IDF Component Manager Manifest File
+## This file describes the component dependencies for ESP-IDF projects
+
+dependencies:
+  # ESP-DSP for FFT processing
+  espressif/esp-dsp: "^1.3.0"
+  
+  # TensorFlow Lite Micro for ML inference
+  espressif/esp-tflite-micro: "^1.3.0"
+  
+  # Note: These components will be downloaded automatically
+  # when you run: idf.py build
