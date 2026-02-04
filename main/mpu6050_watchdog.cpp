@@ -86,8 +86,17 @@ esp_err_t MPU6050Watchdog::init() {
     }
     vTaskDelay(pdMS_TO_TICKS(10));
 
+    // Set accelerometer range to ±8g for industrial use
+    // This must be done for readRawData() to use correct scale
+    ret = setAccelRange(AccelRange::RANGE_8G);
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to set accel range");
+        return ret;
+    }
+    config_.accel_range = AccelRange::RANGE_8G;
+
     sensor_initialized_ = true;
-    ESP_LOGI(TAG, "MPU6050 initialized successfully");
+    ESP_LOGI(TAG, "MPU6050 initialized successfully (range: +/-8g)");
     return ESP_OK;
 }
 

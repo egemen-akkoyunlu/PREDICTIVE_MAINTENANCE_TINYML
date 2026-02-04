@@ -2,12 +2,14 @@
 
 # Option to build only the deep sleep firmware (Task 1)
 # or full anomaly detection with TFLite (Task 4)
-option(BUILD_ANOMALY_DETECTOR "Build full anomaly detector with TFLite" OFF)
+option(BUILD_ANOMALY_DETECTOR "Build full anomaly detector with TFLite" ON)
 
 if(BUILD_ANOMALY_DETECTOR)
-    # Full anomaly detection build
+    # Full anomaly detection build with dual sensors + SD card logging
     set(SRCS
         "anomaly_detector.cpp"
+        "mpu6050_watchdog.cpp"
+        "sd_card_logger.cpp"
     )
     
     idf_component_register(
@@ -21,6 +23,8 @@ if(BUILD_ANOMALY_DETECTOR)
         PRIV_REQUIRES
             esp_timer
             esp_system
+            nvs_flash
+            fatfs
     )
     
 else()

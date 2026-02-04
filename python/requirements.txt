@@ -1,6 +1,12 @@
+# ML Training Dependencies
 numpy>=1.21.0
 scipy>=1.7.0
 matplotlib>=3.5.0
 librosa>=0.10.0
 soundfile>=0.12.0
 tensorflow>=2.12.0
+
+# Ground Control Station Dependencies
+PyQt5>=5.15.0
+pyqtgraph>=0.13.0
+pyserial>=3.5
