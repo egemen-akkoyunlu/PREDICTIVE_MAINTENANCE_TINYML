@@ -89,7 +89,7 @@ namespace config {
     // Sensitivity multiplier for threshold
     // threshold = mean + (SENSITIVITY * std_dev)
     // Lower = more sensitive, Higher = fewer false positives
-    constexpr float SENSITIVITY = 2.0f;                  // 3 sigma rule
+    constexpr float SENSITIVITY = 2.0f;                  // 2 sigma rule
     
     // Minimum threshold (prevents too-sensitive detection)
     constexpr float MIN_THRESHOLD_OFFSET = 0.01f;        // At least 0.01 above mean
