@@ -463,6 +463,20 @@ static VibrationFeatures computeVibrationFeatures(pdm::MPU6050Watchdog& mpu) {
 static void anomalyDetectionTask(void* pvParameters) {
     ESP_LOGI(TAG, "Starting self-calibrating anomaly detection");
     
+    // Allow power to stabilize (fixes some SD card init issues)
+    vTaskDelay(pdMS_TO_TICKS(1000));
+    
+    // Initialize SD Card Logger FIRST (Black Box)
+    pdm::SDCardConfig sd_config;  // Uses default pins
+    pdm::SDCardLogger sdLogger(sd_config);
+    esp_err_t sd_ret = sdLogger.init();
+    bool sd_available = (sd_ret == ESP_OK);
+    if (!sd_available) {
+        ESP_LOGW(TAG, "SD card logging disabled (Error: %s) - continuing without black box", esp_err_to_name(sd_ret));
+    } else {
+        ESP_LOGI(TAG, "SD card logging ENABLED and READY");
+    }
+
     // Initialize MPU6050 (optional)
     bool mpu_available = false;
     pdm::MPU6050Watchdog mpu(config::MPU_I2C_PORT, config::MPU_SDA_PIN, config::MPU_SCL_PIN);
@@ -474,14 +488,6 @@ static void anomalyDetectionTask(void* pvParameters) {
         } else {
             ESP_LOGW(TAG, "MPU6050 not found");
         }
-    }
-    
-    // Initialize SD Card Logger (Black Box)
-    pdm::SDCardConfig sd_config;  // Uses default pins
-    pdm::SDCardLogger sdLogger(sd_config);
-    bool sd_available = (sdLogger.init() == ESP_OK);
-    if (!sd_available) {
-        ESP_LOGW(TAG, "SD card logging disabled - continuing without black box");
     }
     
     // Initialize I2S Microphone
@@ -581,8 +587,10 @@ static void anomalyDetectionTask(void* pvParameters) {
         
         // Collect vibration data (needed for both calibration and detection)
         VibrationFeatures vib = {0};
+        float temp_c = 0.0f;
         if (mpu_available) {
             vib = computeVibrationFeatures(mpu);
+            mpu.readTemperature(temp_c);  // Temperature from MPU6050
         }
         
         if (samples_read >= required_samples) {
@@ -634,9 +642,9 @@ static void anomalyDetectionTask(void* pvParameters) {
                 const char* source = audio_fault && accel_fault ? "BOTH" : 
                                     audio_fault ? "AUDIO" : "VIBRATION";
                 
-                ESP_LOGW(TAG, "ANOMALY [%s] MSE=%.4f (th=%.4f) | RMS=%.3fg (th=%.3fg)", 
+                ESP_LOGW(TAG, "ANOMALY [%s] MSE=%.4f (th=%.4f) | RMS=%.3fg (th=%.3fg) | Temp=%.1fC", 
                          source, audio_mse, g_calibration.threshold,
-                         vib.rms, g_calibration.vib_threshold);
+                         vib.rms, g_calibration.vib_threshold, temp_c);
                 
                 // Log to SD card (Black Box)
                 if (sd_available) {
@@ -655,9 +663,9 @@ static void anomalyDetectionTask(void* pvParameters) {
                     }
                 }
                 
-                ESP_LOGI(TAG, "Normal: MSE=%.4f (th=%.4f) | RMS=%.3fg (th=%.3fg)", 
+                ESP_LOGI(TAG, "Normal: MSE=%.4f (th=%.4f) | RMS=%.3fg (th=%.3fg) | Temp=%.1fC", 
                          audio_mse, g_calibration.threshold, 
-                         vib.rms, g_calibration.vib_threshold);
+                         vib.rms, g_calibration.vib_threshold, temp_c);
             }
             
             // Stats every 20 detections

@@ -39,8 +39,8 @@ struct SDCardConfig {
     const char* log_filename = "/sdcard/log.csv";  // Short 8.3 name for compatibility
     
     // SPI configuration
-    spi_host_device_t spi_host = SPI2_HOST;
-    int max_freq_khz = 4000;  // Start conservative, can increase to 20000
+    spi_host_device_t spi_host = SPI3_HOST; // Use VSPI (Native pins 18,19,23,5)
+    int max_freq_khz = 4000;  // Standard speed
 };
 
 /**

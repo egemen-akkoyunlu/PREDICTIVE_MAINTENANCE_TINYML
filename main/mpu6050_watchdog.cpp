@@ -188,6 +188,25 @@ bool MPU6050Watchdog::isConnected() {
     return connected;
 }
 
+esp_err_t MPU6050Watchdog::readTemperature(float& temp_c) {
+    uint8_t buffer[2];
+    
+    esp_err_t ret = readRegisters(REG_TEMP_OUT_H, buffer, 2);
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to read temperature");
+        return ret;
+    }
+    
+    // Combine high and low bytes (big-endian)
+    int16_t raw_temp = static_cast<int16_t>((buffer[0] << 8) | buffer[1]);
+    
+    // Convert to Celsius using MPU6050 formula:
+    // Temperature in degrees C = (TEMP_OUT / 340.0) + 36.53
+    temp_c = (static_cast<float>(raw_temp) / 340.0f) + 36.53f;
+    
+    return ESP_OK;
+}
+
 // ============================================================================
 // Private Methods - I2C Communication
 // ============================================================================

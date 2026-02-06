@@ -212,6 +212,17 @@ public:
      */
     const MotionConfig& getConfig() const { return config_; }
 
+    /**
+     * @brief Read temperature from MPU6050 internal sensor
+     * 
+     * The MPU6050 has a built-in temperature sensor.
+     * Accuracy: ±1°C, useful for thermal monitoring.
+     * 
+     * @param temp_c Output: Temperature in Celsius
+     * @return ESP_OK on success, error code otherwise
+     */
+    esp_err_t readTemperature(float& temp_c);
+
 private:
     // ============== Private Constants ==============
     static constexpr uint8_t MPU6050_DEFAULT_ADDR = 0x68;
@@ -228,6 +239,7 @@ private:
     static constexpr uint8_t REG_MOT_THR       = 0x1F;
     static constexpr uint8_t REG_MOT_DUR       = 0x20;
     static constexpr uint8_t REG_ACCEL_XOUT_H  = 0x3B;
+    static constexpr uint8_t REG_TEMP_OUT_H    = 0x41;  // Temperature sensor
     static constexpr uint8_t REG_MOT_DETECT_CTRL = 0x69;
 
     // Bit masks for PWR_MGMT_1

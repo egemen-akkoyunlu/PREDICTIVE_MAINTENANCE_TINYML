@@ -38,17 +38,23 @@ esp_err_t SDCardLogger::init() {
     bus_cfg.sclk_io_num = config_.clk_pin;
     bus_cfg.quadwp_io_num = -1;
     bus_cfg.quadhd_io_num = -1;
-    bus_cfg.max_transfer_sz = 4000;
+    bus_cfg.max_transfer_sz = 4096; // Must be at least sector size (512) or cluster size
 
-    esp_err_t ret = spi_bus_initialize(config_.spi_host, &bus_cfg, SDSPI_DEFAULT_DMA);
+    // Use SPI_DMA_CH_AUTO to enable DMA (Required for transfer > 64 bytes)
+    esp_err_t ret = spi_bus_initialize(config_.spi_host, &bus_cfg, SPI_DMA_CH_AUTO);
     if (ret != ESP_OK) {
         ESP_LOGE(TAG, "Failed to initialize SPI bus: %s", esp_err_to_name(ret));
         return ret;
     }
 
+    // CRITICAL: Internal pull-up for MISO is required for many SD modules
+    // without their own strong pull-ups.
+    gpio_set_pull_mode(config_.miso_pin, GPIO_PULLUP_ONLY);
+    gpio_set_pull_mode(config_.cs_pin, GPIO_PULLUP_ONLY);
+
     // SD card mount configuration
     esp_vfs_fat_sdmmc_mount_config_t mount_config = {};
-    mount_config.format_if_mount_failed = false;  // Don't format - data loss risk
+    mount_config.format_if_mount_failed = false;
     mount_config.max_files = 5;
     mount_config.allocation_unit_size = 16 * 1024;
 
@@ -57,10 +63,11 @@ esp_err_t SDCardLogger::init() {
     slot_config.gpio_cs = config_.cs_pin;
     slot_config.host_id = config_.spi_host;
 
-    // SPI host configuration (required for esp_vfs_fat_sdspi_mount)
+    // SPI host configuration
     sdmmc_host_t host = SDSPI_HOST_DEFAULT();
     host.slot = config_.spi_host;
-    host.max_freq_khz = config_.max_freq_khz;
+    host.max_freq_khz = 400;      // Force 400kHz "Safe Mode" for timeout issues
+    host.command_timeout_ms = 1000; // Even longer timeout for slow operations
 
     // Mount filesystem
     ret = esp_vfs_fat_sdspi_mount(
@@ -76,7 +83,11 @@ esp_err_t SDCardLogger::init() {
             ESP_LOGE(TAG, "Failed to mount filesystem. Check SD card format (FAT32).");
         } else {
             ESP_LOGE(TAG, "Failed to initialize SD card: %s", esp_err_to_name(ret));
-            ESP_LOGE(TAG, "Check wiring: MOSI=%d, MISO=%d, CLK=%d, CS=%d",
+            if (ret == 0x108) { // ESP_ERR_INVALID_RESPONSE
+                ESP_LOGE(TAG, "-> Possible causes: Wiring too long, shared SPI bus, or insufficient power (SD card needs ~100mA spikes)");
+                ESP_LOGE(TAG, "-> Current frequency: %d kHz", config_.max_freq_khz);
+            }
+            ESP_LOGE(TAG, "Check pins: MOSI=%d, MISO=%d, CLK=%d, CS=%d",
                      config_.mosi_pin, config_.miso_pin, config_.clk_pin, config_.cs_pin);
         }
         spi_bus_free(config_.spi_host);
