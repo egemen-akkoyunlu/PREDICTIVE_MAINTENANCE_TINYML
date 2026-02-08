@@ -35,6 +35,8 @@ struct InferenceConfig {
     float anomaly_threshold;         // Reconstruction error threshold
     size_t input_height;            // Spectrogram height (freq bins)
     size_t input_width;             // Spectrogram width (time frames)
+    
+    static constexpr size_t MEMORY_ALIGNMENT = 16; // 16-byte alignment for SIMD/DMA optimizations
 };
 
 /**
@@ -251,15 +253,16 @@ inline esp_err_t TFLiteInference::init() {
         return ESP_ERR_INVALID_VERSION;
     }
     
-    // Allocate tensor arena
+    // Allocate tensor arena with 16-byte alignment
     // Try PSRAM first if available, fall back to internal RAM
+    // Optimization: Using aligned allocation improves memory access speed for neural network ops
     tensor_arena_ = static_cast<uint8_t*>(
-        heap_caps_malloc(config_.tensor_arena_size, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT));
+        heap_caps_aligned_alloc(InferenceConfig::MEMORY_ALIGNMENT, config_.tensor_arena_size, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT));
     
     if (!tensor_arena_) {
-        ESP_LOGW(TAG, "PSRAM not available, using internal RAM");
+        ESP_LOGW(TAG, "PSRAM not available, using internal RAM (aligned)");
         tensor_arena_ = static_cast<uint8_t*>(
-            heap_caps_malloc(config_.tensor_arena_size, MALLOC_CAP_8BIT));
+            heap_caps_aligned_alloc(InferenceConfig::MEMORY_ALIGNMENT, config_.tensor_arena_size, MALLOC_CAP_8BIT));
     }
     
     if (!tensor_arena_) {

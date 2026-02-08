@@ -33,6 +33,8 @@ struct STFTConfig {
     size_t hop_size;        // Hop length between frames
     size_t num_frames;      // Number of time frames in output
     size_t sample_rate;     // Sample rate for frequency calculation
+    
+    static constexpr size_t MEMORY_ALIGNMENT = 16; // 16-byte alignment for DSP/SIMD operations
 };
 
 /**
@@ -205,28 +207,28 @@ inline esp_err_t STFTProcessor::init() {
         return ret;
     }
     
-    // Allocate buffers on heap (IMPORTANT: avoid stack overflow)
+    // Allocate buffers on heap with 16-byte alignment for SIMD optimization
     // FFT input: complex array, size = fft_size * 2
-    fft_input_ = static_cast<float*>(heap_caps_malloc(
-        config_.fft_size * 2 * sizeof(float), MALLOC_CAP_8BIT));
+    fft_input_ = static_cast<float*>(heap_caps_aligned_alloc(
+        STFTConfig::MEMORY_ALIGNMENT, config_.fft_size * 2 * sizeof(float), MALLOC_CAP_8BIT));
     if (!fft_input_) {
-        ESP_LOGE(TAG, "Failed to allocate FFT input buffer");
+        ESP_LOGE(TAG, "Failed to allocate aligned FFT input buffer");
         return ESP_ERR_NO_MEM;
     }
     
-    // Window coefficients
-    window_ = static_cast<float*>(heap_caps_malloc(
-        config_.fft_size * sizeof(float), MALLOC_CAP_8BIT));
+    // Window coefficients (16-byte aligned)
+    window_ = static_cast<float*>(heap_caps_aligned_alloc(
+        STFTConfig::MEMORY_ALIGNMENT, config_.fft_size * sizeof(float), MALLOC_CAP_8BIT));
     if (!window_) {
-        ESP_LOGE(TAG, "Failed to allocate window buffer");
+        ESP_LOGE(TAG, "Failed to allocate aligned window buffer");
         return ESP_ERR_NO_MEM;
     }
     
-    // Frame buffer for windowed samples
-    frame_buffer_ = static_cast<float*>(heap_caps_malloc(
-        config_.fft_size * sizeof(float), MALLOC_CAP_8BIT));
+    // Frame buffer for windowed samples (16-byte aligned)
+    frame_buffer_ = static_cast<float*>(heap_caps_aligned_alloc(
+        STFTConfig::MEMORY_ALIGNMENT, config_.fft_size * sizeof(float), MALLOC_CAP_8BIT));
     if (!frame_buffer_) {
-        ESP_LOGE(TAG, "Failed to allocate frame buffer");
+        ESP_LOGE(TAG, "Failed to allocate aligned frame buffer");
         return ESP_ERR_NO_MEM;
     }
     
