@@ -76,3 +76,12 @@ Desktop.ini
 *.workspace # General workspace files, can be from various tools
 *.suo       # Visual Studio Solution User Options
 *.sln.docstates # Visual Studio
+
+# Excluded project configuration and temporary files
+.vscode/
+.devcontainer/
+.clangd/
+dependencies.lock
+sdkconfig.ci
+pytest_hello_world.py
+docs/
