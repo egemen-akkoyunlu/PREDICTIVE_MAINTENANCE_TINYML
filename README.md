@@ -42,11 +42,10 @@ A self-calibrating, unsupervised anomaly detection system for rotating machinery
 
 ## 🧠 Software Architecture
 
-### 1. Python Training Pipeline (`python/`)
-*   **`autoencoder_model.py`:** Defines the Convolutional Autoencoder architecture using TensorFlow/Keras.
-*   **`train_esp32_matched.py`:** Trains the model using a custom STFT implementation that exactly matches the ESP32's DSP pipeline.
-*   **`dsp_pipeline.py`:** A demonstration script to visualize Signal Processing concepts (STFT vs Mel Spectrograms) and simulate fault signals.
-*   **`ground_control_station.py`:** A PyQt5 GUI for real-time visualization of sensor data and anomaly status from the ESP32 (via Serial).
+### 1. Data Pipeline & Training (`pipeline/`)
+*   **`pipeline/model/`**: Contains the Autoencoder model (`autoencoder_model.py`), `train_esp32_matched.py`, and training scripts.
+*   **`pipeline/gui/`**: The Ground Control Station (`ground_control_station.py`) for real-time visualization.
+*   **`pipeline/utils/`**: Helper scripts like `dsp_pipeline.py`.
 
 ### 2. ESP32 Firmware (`main/`)
 *   **Core Logic:**
@@ -69,10 +68,10 @@ A self-calibrating, unsupervised anomaly detection system for rotating machinery
 
 ### Step 1: Train the Model (Optional)
 *   The project comes with a pre-trained model. If you want to retrain:
-    1.  Install dependencies: `pip install -r python/requirements.txt`
+    1.  Install dependencies: `pip install -r pipeline/requirements.txt`
     2.  Collect normal sound samples (wav files) in a folder.
-    3.  Run training: `python python/train_esp32_matched.py`
-    4.  Copy the generated `model_data.h` to `main/`.
+    3.  Run training: `python pipeline/model/train_esp32_matched.py`
+    4.  Copy the generated `model_data.h` to `main/model/`.
 
 ### Step 2: Flash the ESP32
 1.  Install **ESP-IDF** (v5.x recommended).

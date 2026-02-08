@@ -20,7 +20,7 @@
 // TensorFlow Lite Micro headers
 #include "tensorflow/lite/micro/micro_interpreter.h"
 #include "tensorflow/lite/micro/micro_mutable_op_resolver.h"
-#include "tensorflow/lite/schema/schema_generated.h"
+// #include "model_data.h" // Not strictly needed here if passed as pointer, but good for reference if needed.
 
 #include <cstdint>
 #include <cmath>

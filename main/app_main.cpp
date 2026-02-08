@@ -18,8 +18,8 @@
 #include "esp_log.h"
 #include "esp_system.h"
 
-#include "mpu6050_watchdog.hpp"
-#include "deep_sleep_manager.hpp"
+#include "drivers/mpu6050_watchdog.hpp"
+#include "drivers/deep_sleep_manager.hpp"
 
 static const char* TAG = "PdM-Main";
 

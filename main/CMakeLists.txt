@@ -8,8 +8,8 @@ if(BUILD_ANOMALY_DETECTOR)
     # Full anomaly detection build with dual sensors + SD card logging
     set(SRCS
         "anomaly_detector.cpp"
-        "mpu6050_watchdog.cpp"
-        "sd_card_logger.cpp"
+        "drivers/mpu6050_watchdog.cpp"
+        "drivers/sd_card_logger.cpp"
     )
     
     idf_component_register(
@@ -17,6 +17,9 @@ if(BUILD_ANOMALY_DETECTOR)
             ${SRCS}
         INCLUDE_DIRS 
             "."
+            "drivers"
+            "dsp"
+            "model"
         REQUIRES
             driver
             freertos
@@ -31,8 +34,8 @@ else()
     # Deep sleep wake-on-vibration build (Task 1)
     set(SRCS
         "app_main.cpp"
-        "mpu6050_watchdog.cpp"
-        "deep_sleep_manager.cpp"
+        "drivers/mpu6050_watchdog.cpp"
+        "drivers/deep_sleep_manager.cpp"
     )
     
     idf_component_register(

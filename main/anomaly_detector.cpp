@@ -31,14 +31,14 @@
 #include "nvs.h"
 
 // Project headers
-#include "i2s_microphone.hpp"
-#include "stft_processor.hpp"
-#include "tflite_inference.hpp"
-#include "mpu6050_watchdog.hpp"
-#include "sd_card_logger.hpp"
+#include "drivers/i2s_microphone.hpp"
+#include "dsp/stft_processor.hpp"
+#include "model/tflite_inference.hpp"
+#include "drivers/mpu6050_watchdog.hpp"
+#include "drivers/sd_card_logger.hpp"
 
 // Include the embedded TFLite model
-#include "model_data.h"
+#include "model/model_data.h"
 
 static const char* TAG = "AnomalyDetector";
 
@@ -319,7 +319,8 @@ static void completeCalibration() {
     float vib_baseline = vib_sum / g_calibration_index;
     
     // Vibration threshold: baseline + fixed offset (0.3g above baseline)
-    float vib_threshold = vib_baseline + 0.3f;
+    float vib_threshold = vib_baseline + 0.3f; // Think here for better approximation
+                                                // Why did I choose 0.3f?
     
     // Store calibration
     g_calibration.baseline_mean = mean;
