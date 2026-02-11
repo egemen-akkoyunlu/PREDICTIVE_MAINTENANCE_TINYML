@@ -318,9 +318,20 @@ static void completeCalibration() {
     }
     float vib_baseline = vib_sum / g_calibration_index;
     
-    // Vibration threshold: baseline + fixed offset (0.3g above baseline)
-    float vib_threshold = vib_baseline + 0.3f; // Think here for better approximation
-                                                // Why did I choose 0.3f?
+    // Compute vibration std deviation for σ-based threshold
+    float vib_var_sum = 0;
+    for (size_t i = 0; i < g_calibration_index; i++) {
+        float vib_diff = g_vib_calibration_samples[i] - vib_baseline;
+        vib_var_sum += vib_diff * vib_diff;
+    }
+    float vib_std_dev = sqrtf(vib_var_sum / g_calibration_index);
+    
+    // Vibration threshold: σ-based, same approach as audio
+    float vib_offset = config::SENSITIVITY * vib_std_dev;
+    if (vib_offset < 0.05f) {
+        vib_offset = 0.05f;  // Minimum offset to avoid hyper-sensitivity
+    }
+    float vib_threshold = vib_baseline + vib_offset;
     
     // Store calibration
     g_calibration.baseline_mean = mean;
@@ -726,8 +737,7 @@ extern "C" void app_main(void) {
         1
     );
     
-    while (true) {
-        vTaskDelay(pdMS_TO_TICKS(10000));
-        ESP_LOGI(TAG, "System running... Free heap: %d bytes", esp_get_free_heap_size());
-    }
+    // app_main returns here; FreeRTOS reclaims this task's stack (~4KB saved).
+    // The anomaly detection task continues running independently on Core 1.
+    ESP_LOGI(TAG, "app_main complete. Detection task running on Core 1.");
 }

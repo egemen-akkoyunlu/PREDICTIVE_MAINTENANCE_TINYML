@@ -51,7 +51,7 @@ except ImportError:
 class Config:
     """Application configuration constants."""
     WINDOW_TITLE = "Predictive Maintenance - Ground Control Station"
-    WINDOW_SIZE = (1400, 900)
+    WINDOW_SIZE = (1400, 1050)
     
     # Serial
     BAUD_RATE = 115200
@@ -423,7 +423,7 @@ class GroundControlStation(QMainWindow):
         
         # Plot
         plot_group = self._create_plot_group()
-        left_layout.addWidget(plot_group, stretch=3)
+        left_layout.addWidget(plot_group, stretch=5)
         
         # Metrics
         metrics_group = self._create_metrics_group()
@@ -505,53 +505,79 @@ class GroundControlStation(QMainWindow):
         return header
         
     def _create_plot_group(self) -> QGroupBox:
-        """Create the plot display group."""
-        group = QGroupBox("◈ RECONSTRUCTION ERROR (MSE) - LIVE TELEMETRY")
+        """Create the dual-plot display group."""
+        group = QGroupBox("◈ LIVE TELEMETRY")
         layout = QVBoxLayout(group)
         
         # Configure pyqtgraph
         pg.setConfigOptions(antialias=True, background=Config.COLOR_BG_DARK)
         
-        self.plot_widget = pg.PlotWidget()
-        self.plot_widget.setBackground(Config.COLOR_BG_DARK)
-        self.plot_widget.showGrid(x=True, y=True, alpha=0.3)
-        self.plot_widget.setLabel('left', 'MSE', color=Config.COLOR_TEXT)
-        self.plot_widget.setLabel('bottom', 'Time (s)', color=Config.COLOR_TEXT)
-        self.plot_widget.getAxis('left').setTextPen(Config.COLOR_TEXT)
-        self.plot_widget.getAxis('bottom').setTextPen(Config.COLOR_TEXT)
+        # --- Audio MSE Graph (Top) ---
+        self.mse_plot = pg.PlotWidget(title="Audio Reconstruction Error (MSE)")
+        self.mse_plot.setBackground(Config.COLOR_BG_DARK)
+        self.mse_plot.showGrid(x=True, y=True, alpha=0.3)
+        self.mse_plot.setLabel('left', 'MSE', color=Config.COLOR_TEXT)
+        self.mse_plot.setLabel('bottom', 'Time (s)', color=Config.COLOR_TEXT)
+        self.mse_plot.getAxis('left').setTextPen(Config.COLOR_TEXT)
+        self.mse_plot.getAxis('bottom').setTextPen(Config.COLOR_TEXT)
+        self.mse_plot.setMinimumHeight(220)
+        layout.addWidget(self.mse_plot)
         
-        layout.addWidget(self.plot_widget)
+        # --- Vibration RMS Graph (Bottom) ---
+        self.rms_plot = pg.PlotWidget(title="Vibration RMS (g)")
+        self.rms_plot.setBackground(Config.COLOR_BG_DARK)
+        self.rms_plot.showGrid(x=True, y=True, alpha=0.3)
+        self.rms_plot.setLabel('left', 'RMS (g)', color=Config.COLOR_TEXT)
+        self.rms_plot.setLabel('bottom', 'Time (s)', color=Config.COLOR_TEXT)
+        self.rms_plot.getAxis('left').setTextPen(Config.COLOR_TEXT)
+        self.rms_plot.getAxis('bottom').setTextPen(Config.COLOR_TEXT)
+        self.rms_plot.setMinimumHeight(220)
+        layout.addWidget(self.rms_plot)
+        
+        # Link X-axes so both graphs scroll together
+        self.rms_plot.setXLink(self.mse_plot)
         
         return group
         
     def _setup_plot(self):
-        """Setup plot curves and threshold line."""
-        # MSE data curve
-        self.mse_curve = self.plot_widget.plot(
+        """Setup plot curves and threshold lines for both graphs."""
+        # --- Audio MSE Graph ---
+        self.mse_curve = self.mse_plot.plot(
             pen=pg.mkPen(color=Config.COLOR_PLOT_LINE, width=2),
             name="Audio MSE"
         )
-        
-        # Threshold line
-        self.threshold_line = pg.InfiniteLine(
+        self.mse_threshold_line = pg.InfiniteLine(
             pos=self.mse_threshold,
             angle=0,
             pen=pg.mkPen(color=Config.COLOR_THRESHOLD, width=2, style=Qt.DashLine),
             label=f'Threshold: {self.mse_threshold}',
             labelOpts={'color': Config.COLOR_THRESHOLD, 'position': 0.95}
         )
-        self.plot_widget.addItem(self.threshold_line)
-
-        # Anomaly markers (Scatter plot)
-        self.anomaly_markers = pg.ScatterPlotItem(
-            size=10, 
-            pen=pg.mkPen(None), 
-            brush=pg.mkBrush(Config.COLOR_WARNING)
+        self.mse_plot.addItem(self.mse_threshold_line)
+        self.mse_anomaly_markers = pg.ScatterPlotItem(
+            size=10, pen=pg.mkPen(None), brush=pg.mkBrush(Config.COLOR_WARNING)
         )
-        self.plot_widget.addItem(self.anomaly_markers)
+        self.mse_plot.addItem(self.mse_anomaly_markers)
+        self.mse_plot.setYRange(0, 0.1)
         
-        # Set initial Y range
-        self.plot_widget.setYRange(0, 0.1)
+        # --- Vibration RMS Graph ---
+        self.rms_curve = self.rms_plot.plot(
+            pen=pg.mkPen(color='#ffaa00', width=2),
+            name="Vibration RMS"
+        )
+        self.rms_threshold_line = pg.InfiniteLine(
+            pos=self.rms_threshold,
+            angle=0,
+            pen=pg.mkPen(color=Config.COLOR_THRESHOLD, width=2, style=Qt.DashLine),
+            label=f'Threshold: {self.rms_threshold}',
+            labelOpts={'color': Config.COLOR_THRESHOLD, 'position': 0.95}
+        )
+        self.rms_plot.addItem(self.rms_threshold_line)
+        self.rms_anomaly_markers = pg.ScatterPlotItem(
+            size=10, pen=pg.mkPen(None), brush=pg.mkBrush(Config.COLOR_WARNING)
+        )
+        self.rms_plot.addItem(self.rms_anomaly_markers)
+        self.rms_plot.setYRange(0, 1.0)
         
     def _create_metrics_group(self) -> QGroupBox:
         """Create the metrics display group."""
@@ -567,6 +593,7 @@ class GroundControlStation(QMainWindow):
             ("VIBRATION RMS", "rms_value", "0.000 g"),
             ("RMS THRESHOLD", "rms_th_value", "---"),
             ("ANOMALIES", "anomalies_value", "0"),
+            ("ANOMALY RATE", "rate_value", "0.0%"),
         ]
         
         for i, (label_text, attr_name, default_value) in enumerate(metrics):
@@ -581,8 +608,10 @@ class GroundControlStation(QMainWindow):
                     padding: 10px;
                 }}
             """)
+            container.setMinimumHeight(70)
             container_layout = QVBoxLayout(container)
-            container_layout.setSpacing(5)
+            container_layout.setSpacing(2)
+            container_layout.setContentsMargins(5, 5, 5, 5)
             
             label = QLabel(label_text)
             label.setFont(QFont("Consolas", 9))
@@ -591,7 +620,7 @@ class GroundControlStation(QMainWindow):
             container_layout.addWidget(label)
             
             value = QLabel(default_value)
-            value.setFont(QFont("Consolas", 18, QFont.Bold))
+            value.setFont(QFont("Consolas", 14, QFont.Bold))
             value.setStyleSheet(f"color: {Config.COLOR_ACCENT};")
             value.setAlignment(Qt.AlignCenter)
             container_layout.addWidget(value)
@@ -741,10 +770,11 @@ class GroundControlStation(QMainWindow):
         if mse_th is not None:
             self.mse_threshold = mse_th
             self.mse_th_value.setText(f"{mse_th:.4f}")
-            self.threshold_line.setPos(mse_th)
+            self.mse_threshold_line.setPos(mse_th)
         if rms_th is not None:
             self.rms_threshold = rms_th
             self.rms_th_value.setText(f"{rms_th:.3f} g")
+            self.rms_threshold_line.setPos(rms_th)
         
         # Update statistics (only if not calibrating)
         if not calibrating:
@@ -754,8 +784,11 @@ class GroundControlStation(QMainWindow):
             
             if is_anomaly:
                 self.anomaly_count += 1
-                # Add anomaly marker to graph
-                self.anomaly_markers.addPoints([{'pos': (current_time, mse)}])
+                # Add anomaly markers to the correct graph(s)
+                if anomaly_source in ['AUDIO', 'BOTH']:
+                    self.mse_anomaly_markers.addPoints([{'pos': (current_time, mse)}])
+                if anomaly_source in ['VIBRATION', 'BOTH']:
+                    self.rms_anomaly_markers.addPoints([{'pos': (current_time, rms)}])
         
         # Update UI - MSE
         self.mse_value.setText(f"{mse:.4f}")
@@ -797,19 +830,27 @@ class GroundControlStation(QMainWindow):
             self.status_label.setStyleSheet(f"color: {Config.COLOR_ACCENT};")
             
     def _update_plot(self):
-        """Update the plot with current data."""
+        """Update both plots with current data."""
         if len(self.time_history) > 0:
-            self.mse_curve.setData(list(self.time_history), list(self.mse_history))
+            times = list(self.time_history)
+            self.mse_curve.setData(times, list(self.mse_history))
+            self.rms_curve.setData(times, list(self.rms_history))
             
-            # Auto-scale Y axis based on data, but cap at reasonable max
+            # Auto-scale MSE Y axis
             if len(self.mse_history) > 0:
-                # Use threshold * 3 as a reasonable max to keep normal values visible
-                # Cap at 0.2 to prevent extreme outliers from ruining the scale
                 max_mse = min(
                     max(max(self.mse_history), self.mse_threshold * 2),
-                    0.2  # Hard cap - no MSE should realistically exceed this
+                    0.2
                 )
-                self.plot_widget.setYRange(0, max_mse * 1.2)
+                self.mse_plot.setYRange(0, max_mse * 1.2)
+            
+            # Auto-scale RMS Y axis
+            if len(self.rms_history) > 0:
+                max_rms = min(
+                    max(max(self.rms_history), self.rms_threshold * 2),
+                    5.0
+                )
+                self.rms_plot.setYRange(0, max_rms * 1.2)
                 
     def _log_message(self, message: str, color: str = Config.COLOR_TEXT):
         """Add a message to the log console."""
@@ -845,7 +886,8 @@ class GroundControlStation(QMainWindow):
         self.anomalies_value.setText("0")
         self.rate_value.setText("0.0%")
         self.log_console.clear()
-        self.anomaly_markers.clear()
+        self.mse_anomaly_markers.clear()
+        self.rms_anomaly_markers.clear()
         
         self._log_message("[SYSTEM] Data cleared", "#00ff88")
         

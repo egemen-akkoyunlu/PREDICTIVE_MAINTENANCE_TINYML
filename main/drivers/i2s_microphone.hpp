@@ -140,6 +140,10 @@ private:
     bool is_initialized_;
     bool is_running_;
     
+    // Pre-allocated buffer for readFloat conversion (avoids per-call malloc)
+    int32_t* raw_buffer_;
+    size_t raw_buffer_size_;
+    
     /**
      * @brief Configure I2S channel
      */
@@ -155,6 +159,8 @@ inline I2SMicrophone::I2SMicrophone(const I2SMicConfig& config)
     , rx_channel_(nullptr)
     , is_initialized_(false)
     , is_running_(false)
+    , raw_buffer_(nullptr)
+    , raw_buffer_size_(0)
 {
 }
 
@@ -164,6 +170,9 @@ inline I2SMicrophone::~I2SMicrophone() {
     }
     if (is_initialized_ && rx_channel_ != nullptr) {
         i2s_del_channel(rx_channel_);
+    }
+    if (raw_buffer_) {
+        free(raw_buffer_);
     }
 }
 
@@ -305,22 +314,25 @@ inline size_t I2SMicrophone::readRaw(int32_t* buffer, size_t num_samples, uint32
 }
 
 inline size_t I2SMicrophone::readFloat(float* buffer, size_t num_samples, uint32_t timeout_ms) {
-    // Allocate temporary buffer for raw samples
-    // Note: For large buffers, this should be pre-allocated
-    int32_t* raw_buffer = static_cast<int32_t*>(malloc(num_samples * sizeof(int32_t)));
-    if (raw_buffer == nullptr) {
-        ESP_LOGE(TAG, "Failed to allocate temporary buffer");
-        return 0;
+    // Ensure pre-allocated buffer is large enough
+    if (raw_buffer_ == nullptr || num_samples > raw_buffer_size_) {
+        if (raw_buffer_) free(raw_buffer_);
+        raw_buffer_ = static_cast<int32_t*>(malloc(num_samples * sizeof(int32_t)));
+        if (raw_buffer_ == nullptr) {
+            ESP_LOGE(TAG, "Failed to allocate raw buffer");
+            raw_buffer_size_ = 0;
+            return 0;
+        }
+        raw_buffer_size_ = num_samples;
     }
     
-    size_t samples_read = readRaw(raw_buffer, num_samples, timeout_ms);
+    size_t samples_read = readRaw(raw_buffer_, num_samples, timeout_ms);
     
     // Convert to normalized float
     for (size_t i = 0; i < samples_read; i++) {
-        buffer[i] = static_cast<float>(raw_buffer[i]) * NORMALIZE_FACTOR;
+        buffer[i] = static_cast<float>(raw_buffer_[i]) * NORMALIZE_FACTOR;
     }
     
-    free(raw_buffer);
     return samples_read;
 }
 
