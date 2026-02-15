@@ -50,6 +50,17 @@ constexpr InferenceConfig DEFAULT_INFERENCE_CONFIG = {
 };
 
 /**
+ * @brief Number of frequency bands for analysis
+ * Bands split the 32 NN frequency rows into 4 groups of 8:
+ *   LOW   (rows 0-7)   = 0-250 Hz   → Imbalance, misalignment
+ *   MID   (rows 8-15)  = 250-500 Hz → Gear mesh, looseness
+ *   HIGH  (rows 16-23) = 500-750 Hz → Bearing defects
+ *   ULTRA (rows 24-31) = 750-1000 Hz → Early bearing wear, cavitation
+ */
+constexpr size_t NUM_FREQ_BANDS = 4;
+constexpr size_t BAND_SIZE = 8;  // 32 rows / 4 bands
+
+/**
  * @brief Inference result
  */
 struct InferenceResult {
@@ -57,6 +68,7 @@ struct InferenceResult {
     bool is_anomaly;                  // True if error > threshold
     float max_error;                  // Maximum single-value error
     uint32_t inference_time_ms;      // Time taken for inference
+    float band_errors[NUM_FREQ_BANDS]; // Per-band MSE: [LOW, MID, HIGH, ULTRA]
 };
 
 /**
@@ -389,6 +401,48 @@ inline esp_err_t TFLiteInference::runInference(const float* spectrogram, Inferen
         float error = fabsf(spectrogram[i] - output_data[i]);
         if (error > result.max_error) {
             result.max_error = error;
+        }
+    }
+    
+    // ===== FREQUENCY BAND ANALYSIS (2-pass: compute then gate by energy) =====
+    // Pass 1: Compute raw band MSE and band energy
+    float band_mse_raw[NUM_FREQ_BANDS] = {0};
+    float band_energy_raw[NUM_FREQ_BANDS] = {0};
+    float total_energy = 0.0f;
+    
+    for (size_t band = 0; band < NUM_FREQ_BANDS; band++) {
+        float error_sum = 0.0f;
+        float energy_sum = 0.0f;
+        size_t freq_start = band * BAND_SIZE;
+        size_t freq_end = freq_start + BAND_SIZE;
+        size_t count = 0;
+        
+        for (size_t frame = 0; frame < config_.input_width; frame++) {
+            for (size_t freq = freq_start; freq < freq_end; freq++) {
+                size_t idx = frame * config_.input_height + freq;
+                float diff = spectrogram[idx] - output_data[idx];
+                error_sum += diff * diff;
+                energy_sum += spectrogram[idx] * spectrogram[idx];
+                count++;
+            }
+        }
+        band_mse_raw[band] = (count > 0) ? (error_sum / count) : 0.0f;
+        band_energy_raw[band] = (count > 0) ? (energy_sum / count) : 0.0f;
+        total_energy += band_energy_raw[band];
+    }
+    
+    // Pass 2: Normalize, but gate out bands with insufficient energy
+    // Two gates: relative (5% of total) AND absolute (prevents inf when spectrogram is all-zeros)
+    constexpr float MIN_ENERGY_FRACTION = 0.05f;
+    constexpr float MIN_ABS_ENERGY = 1e-4f;
+    float min_energy = total_energy * MIN_ENERGY_FRACTION;
+    if (min_energy < MIN_ABS_ENERGY) min_energy = MIN_ABS_ENERGY;
+    
+    for (size_t band = 0; band < NUM_FREQ_BANDS; band++) {
+        if (band_energy_raw[band] < min_energy) {
+            result.band_errors[band] = 0.0f;  // Not enough signal to analyze
+        } else {
+            result.band_errors[band] = band_mse_raw[band] / band_energy_raw[band];
         }
     }
     

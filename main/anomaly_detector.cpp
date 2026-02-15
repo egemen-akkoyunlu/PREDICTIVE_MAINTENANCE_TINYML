@@ -111,8 +111,59 @@ namespace config {
     constexpr uint32_t DETECTION_INTERVAL_MS = 1500;
     constexpr uint32_t ANOMALY_LED_DURATION_MS = 2000;
     constexpr size_t MAIN_TASK_STACK_SIZE = 10240;
+    
+    // =========================================================================
+    // ROLLING WINDOW VOTING (Anti-False-Positive)
+    // =========================================================================
+    
+    constexpr size_t WINDOW_SIZE = 5;          // Number of recent detections to consider
+    constexpr size_t VOTE_THRESHOLD = 3;       // Minimum faults in window to trigger
+    
+    // =========================================================================
+    // SEVERITY LEVELS
+    // =========================================================================
+    
+    constexpr float SEVERITY_WATCH_MULT = 1.0f;    // threshold × 1.0 = WATCH
+    constexpr float SEVERITY_WARNING_MULT = 1.5f;  // threshold × 1.5 = WARNING
+    constexpr float SEVERITY_CRITICAL_MULT = 2.0f; // threshold × 2.0 = CRITICAL
 
 } // namespace config
+
+// =============================================================================
+// SEVERITY & BAND ENUMS
+// =============================================================================
+
+enum class SeverityLevel { NORMAL, WATCH, WARNING, CRITICAL };
+
+static const char* severityToString(SeverityLevel sev) {
+    switch (sev) {
+        case SeverityLevel::WATCH:    return "WATCH";
+        case SeverityLevel::WARNING:  return "WARNING";
+        case SeverityLevel::CRITICAL: return "CRITICAL";
+        default:                      return "NORMAL";
+    }
+}
+
+static SeverityLevel getSeverity(float value, float threshold) {
+    if (value >= threshold * config::SEVERITY_CRITICAL_MULT) return SeverityLevel::CRITICAL;
+    if (value >= threshold * config::SEVERITY_WARNING_MULT)  return SeverityLevel::WARNING;
+    if (value >= threshold * config::SEVERITY_WATCH_MULT)    return SeverityLevel::WATCH;
+    return SeverityLevel::NORMAL;
+}
+
+static const char* BAND_NAMES[] = { "LOW", "MID", "HIGH", "ULTRA" };
+
+static const char* getDominantBand(const float* band_errors) {
+    size_t max_band = 0;
+    float max_err = band_errors[0];
+    for (size_t i = 1; i < pdm::NUM_FREQ_BANDS; i++) {
+        if (band_errors[i] > max_err) {
+            max_err = band_errors[i];
+            max_band = i;
+        }
+    }
+    return BAND_NAMES[max_band];
+}
 
 // =============================================================================
 // CALIBRATION DATA STRUCTURE
@@ -157,6 +208,20 @@ static bool g_anomaly_detected = false;
 static TickType_t g_anomaly_time = 0;
 static uint32_t g_detection_count = 0;
 static uint32_t g_anomaly_count = 0;
+
+// Rolling window voting state
+static bool g_audio_window[config::WINDOW_SIZE] = {false};
+static bool g_vib_window[config::WINDOW_SIZE] = {false};
+static size_t g_window_index = 0;
+
+static bool rollingWindowVote(bool* window, bool current_fault) {
+    window[g_window_index % config::WINDOW_SIZE] = current_fault;
+    size_t votes = 0;
+    for (size_t i = 0; i < config::WINDOW_SIZE; i++) {
+        if (window[i]) votes++;
+    }
+    return votes >= config::VOTE_THRESHOLD;
+}
 
 // =============================================================================
 // NVS STORAGE FUNCTIONS
@@ -593,7 +658,9 @@ static void anomalyDetectionTask(void* pvParameters) {
         
         // Capture audio and run inference
         float audio_mse = 0.0f;
-        bool audio_fault = false;
+        bool audio_raw_fault = false;  // Raw single-sample fault (before voting)
+        pdm::InferenceResult result;
+        memset(&result, 0, sizeof(result));
         
         size_t samples_read = microphone.readFloat(g_audio_buffer, required_samples, 2000);
         
@@ -611,7 +678,6 @@ static void anomalyDetectionTask(void* pvParameters) {
                 stft.normalizeSpectrogram(g_spectrogram, stft.getSpectrogramSize());
                 resizeSpectrogramForNN(g_spectrogram, g_nn_input);
                 
-                pdm::InferenceResult result;
                 ret = inference.runInference(g_nn_input, result);
                 
                 if (ret == ESP_OK) {
@@ -625,18 +691,23 @@ static void anomalyDetectionTask(void* pvParameters) {
                             completeCalibration();
                         }
                     } else if (g_calibration.is_valid) {
-                        // Use calibrated thresholds
-                        audio_fault = audio_mse > g_calibration.threshold;
+                        // Raw threshold check (before rolling window)
+                        audio_raw_fault = audio_mse > g_calibration.threshold;
                     }
                 }
             }
         }
         
-        // Vibration fault check using CALIBRATED threshold
-        bool accel_fault = false;
+        // Vibration raw fault check
+        bool vib_raw_fault = false;
         if (mpu_available && g_calibration.is_valid && !g_is_calibrating) {
-            accel_fault = vib.rms > g_calibration.vib_threshold;
+            vib_raw_fault = vib.rms > g_calibration.vib_threshold;
         }
+        
+        // ============== ROLLING WINDOW VOTING ==============
+        bool audio_fault = rollingWindowVote(g_audio_window, audio_raw_fault);
+        bool accel_fault = rollingWindowVote(g_vib_window, vib_raw_fault);
+        g_window_index++;  // Advance window position
         
         // Output
         if (g_is_calibrating) {
@@ -646,22 +717,55 @@ static void anomalyDetectionTask(void* pvParameters) {
             g_detection_count++;
             bool combined_fault = audio_fault || accel_fault;
             
+            // ============== SEVERITY LEVELS ==============
+            SeverityLevel audio_sev = getSeverity(audio_mse, g_calibration.threshold);
+            SeverityLevel vib_sev = getSeverity(vib.rms, g_calibration.vib_threshold);
+            SeverityLevel overall_sev = (audio_sev > vib_sev) ? audio_sev : vib_sev;
+            
+            // ============== FREQUENCY BAND ANALYSIS ==============
+            const char* dominant_band = getDominantBand(result.band_errors);
+            
             if (combined_fault) {
                 g_anomaly_count++;
                 g_anomaly_detected = true;
                 g_anomaly_time = xTaskGetTickCount();
                 
-                const char* source = audio_fault && accel_fault ? "BOTH" : 
-                                    audio_fault ? "AUDIO" : "VIBRATION";
+                // Source based on CURRENT raw readings, not rolling window history
+                const char* source;
+                if (audio_raw_fault && vib_raw_fault) {
+                    source = "BOTH";
+                } else if (audio_raw_fault) {
+                    source = "AUDIO";
+                } else if (vib_raw_fault) {
+                    source = "VIBRATION";
+                } else {
+                    // Rolling window triggered from history, neither currently faulting
+                    // Pick whichever has the higher ratio to its threshold
+                    float audio_ratio = g_calibration.threshold > 0 ? 
+                        audio_mse / g_calibration.threshold : 0;
+                    float vib_ratio = g_calibration.vib_threshold > 0 ? 
+                        vib.rms / g_calibration.vib_threshold : 0;
+                    source = (audio_ratio >= vib_ratio) ? "AUDIO" : "VIBRATION";
+                }
                 
-                ESP_LOGW(TAG, "ANOMALY [%s] MSE=%.4f (th=%.4f) | RMS=%.3fg (th=%.3fg) | Temp=%.1fC", 
-                         source, audio_mse, g_calibration.threshold,
-                         vib.rms, g_calibration.vib_threshold, temp_c);
+                // Floor severity to WATCH when anomaly is active
+                if (overall_sev == SeverityLevel::NORMAL) {
+                    overall_sev = SeverityLevel::WATCH;
+                }
+                
+                ESP_LOGW(TAG, "%s [%s] MSE=%.4f (th=%.4f) | RMS=%.3fg (th=%.3fg) | Temp=%.1fC | SEV=%s | BAND=%s", 
+                         severityToString(overall_sev), source,
+                         audio_mse, g_calibration.threshold,
+                         vib.rms, g_calibration.vib_threshold, temp_c,
+                         severityToString(overall_sev), dominant_band);
+                
+
+
                 
                 // Log to SD card (Black Box)
                 if (sd_available) {
-                    float threshold = audio_fault ? g_calibration.threshold : g_calibration.vib_threshold;
-                    float value = audio_fault ? audio_mse : vib.rms;
+                    float threshold = audio_raw_fault ? g_calibration.threshold : g_calibration.vib_threshold;
+                    float value = audio_raw_fault ? audio_mse : vib.rms;
                     sdLogger.logAnomaly(source, value, threshold);
                 }
                 
@@ -675,9 +779,10 @@ static void anomalyDetectionTask(void* pvParameters) {
                     }
                 }
                 
-                ESP_LOGI(TAG, "Normal: MSE=%.4f (th=%.4f) | RMS=%.3fg (th=%.3fg) | Temp=%.1fC", 
+                ESP_LOGI(TAG, "Normal: MSE=%.4f (th=%.4f) | RMS=%.3fg (th=%.3fg) | Temp=%.1fC | SEV=%s | BAND=%s", 
                          audio_mse, g_calibration.threshold, 
-                         vib.rms, g_calibration.vib_threshold, temp_c);
+                         vib.rms, g_calibration.vib_threshold, temp_c,
+                         severityToString(overall_sev), dominant_band);
             }
             
             // Stats every 20 detections

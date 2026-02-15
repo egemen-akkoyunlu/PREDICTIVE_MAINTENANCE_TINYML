@@ -83,15 +83,24 @@ class Config:
 class LogParser:
     """Parse ESP32 serial output for MSE/RMS values and status."""
     
-    # Updated regex patterns for dual-sensor log format with temperature
-    # Format: "Normal: MSE=0.0487 (th=0.0587) | RMS=0.181g (th=0.482g) | Temp=25.5C"
-    # Format: "ANOMALY [AUDIO] MSE=0.0963 (th=0.0588) | RMS=0.184g (th=0.481g) | Temp=25.5C"
+    # New format with severity and band:
+    # "Normal: MSE=0.0487 (th=0.0587) | RMS=0.181g (th=0.482g) | Temp=25.5C | SEV=NORMAL | BAND=LOW"
+    # "WARNING [AUDIO] MSE=0.0963 (th=0.0588) | RMS=0.184g (th=0.481g) | Temp=25.5C | SEV=WARNING | BAND=HIGH"
     PATTERN_NORMAL = re.compile(
         r'Normal.*MSE=([0-9.]+).*th=([0-9.]+).*RMS=([0-9.]+)g.*th=([0-9.]+)g.*Temp=([0-9.-]+)C',
         re.IGNORECASE
     )
     PATTERN_ANOMALY = re.compile(
+        r'(WATCH|WARNING|CRITICAL)\s*\[(\w+)\].*MSE=([0-9.]+).*th=([0-9.]+).*RMS=([0-9.]+)g.*th=([0-9.]+)g.*Temp=([0-9.-]+)C',
+        re.IGNORECASE
+    )
+    # Legacy format for backwards compatibility
+    PATTERN_ANOMALY_LEGACY = re.compile(
         r'ANOMALY\s*\[(\w+)\].*MSE=([0-9.]+).*th=([0-9.]+).*RMS=([0-9.]+)g.*th=([0-9.]+)g.*Temp=([0-9.-]+)C',
+        re.IGNORECASE
+    )
+    PATTERN_SEV_BAND = re.compile(
+        r'SEV=(\w+).*BAND=(\w+)',
         re.IGNORECASE
     )
     PATTERN_CALIBRATION = re.compile(
@@ -110,31 +119,54 @@ class LogParser:
         
         Returns:
             dict with keys: mse, mse_threshold, rms, rms_threshold, 
-                           is_anomaly, anomaly_source, calibrating
+                           is_anomaly, anomaly_source, severity, dominant_band,
+                           calibrating
         """
         result = {
             'mse': None,
             'mse_threshold': None,
             'rms': None,
             'rms_threshold': None,
-            'temp': None,  # Temperature in Celsius
+            'temp': None,
             'is_anomaly': None,
             'anomaly_source': None,
+            'severity': 'NORMAL',
+            'dominant_band': None,
             'calibrating': False,
             'cal_progress': None,
             'raw': line.strip()
         }
         
-        # Check for anomaly first (higher priority)
+        # Extract SEV= and BAND= if present (works for both normal and anomaly lines)
+        sev_match = LogParser.PATTERN_SEV_BAND.search(line)
+        if sev_match:
+            result['severity'] = sev_match.group(1).upper()
+            result['dominant_band'] = sev_match.group(2).upper()
+        
+        # Check for anomaly first (new format: WATCH/WARNING/CRITICAL [SOURCE])
         match = LogParser.PATTERN_ANOMALY.search(line)
         if match:
-            result['anomaly_source'] = match.group(1)  # AUDIO, VIBRATION, BOTH
+            result['severity'] = match.group(1).upper()
+            result['anomaly_source'] = match.group(2)  # AUDIO, VIBRATION, BOTH
+            result['mse'] = float(match.group(3))
+            result['mse_threshold'] = float(match.group(4))
+            result['rms'] = float(match.group(5))
+            result['rms_threshold'] = float(match.group(6))
+            result['temp'] = float(match.group(7))
+            result['is_anomaly'] = True
+            return result
+        
+        # Check legacy ANOMALY format for backwards compatibility
+        match = LogParser.PATTERN_ANOMALY_LEGACY.search(line)
+        if match:
+            result['anomaly_source'] = match.group(1)
             result['mse'] = float(match.group(2))
             result['mse_threshold'] = float(match.group(3))
             result['rms'] = float(match.group(4))
             result['rms_threshold'] = float(match.group(5))
             result['temp'] = float(match.group(6))
             result['is_anomaly'] = True
+            result['severity'] = 'WARNING'  # Default for legacy
             return result
             
         # Check for normal status
@@ -215,12 +247,20 @@ class SerialReaderThread(QThread):
 # =============================================================================
 
 class TrafficLightWidget(QWidget):
-    """Large status indicator widget - GREEN/RED traffic light."""
+    """4-state traffic light: NORMAL(green), WATCH(yellow), WARNING(orange), CRITICAL(red)."""
+    
+    # Color scheme for each severity level
+    SEVERITY_COLORS = {
+        'NORMAL':   {'active': '#00ff88', 'dim': '#003300', 'pos': 3},
+        'WATCH':    {'active': '#ffdd00', 'dim': '#333300', 'pos': 2},
+        'WARNING':  {'active': '#ff8800', 'dim': '#332200', 'pos': 1},
+        'CRITICAL': {'active': '#ff0000', 'dim': '#330000', 'pos': 0},
+    }
     
     def __init__(self, parent=None):
         super().__init__(parent)
-        self.status = "IDLE"  # IDLE, NORMAL, ANOMALY
-        self.setMinimumSize(120, 250)
+        self.status = "IDLE"  # IDLE, NORMAL, WATCH, WARNING, CRITICAL
+        self.setMinimumSize(120, 320)
         self.setMaximumWidth(150)
         
     def set_status(self, status: str):
@@ -229,7 +269,7 @@ class TrafficLightWidget(QWidget):
         self.update()
         
     def paintEvent(self, event):
-        """Custom paint for traffic light appearance."""
+        """Custom paint for 4-light traffic light."""
         painter = QPainter(self)
         painter.setRenderHint(QPainter.Antialiasing)
         
@@ -240,43 +280,35 @@ class TrafficLightWidget(QWidget):
         painter.setPen(QColor("#333366"))
         painter.drawRoundedRect(10, 10, w - 20, h - 20, 15, 15)
         
-        # Light positions
-        light_radius = min(w - 60, 50)
+        # 4 light positions: CRITICAL(top), WARNING, WATCH, NORMAL(bottom)
+        light_radius = min(w - 60, 35)
         center_x = w // 2
-        red_y = 60
-        green_y = h - 80
+        lights = ['CRITICAL', 'WARNING', 'WATCH', 'NORMAL']
+        spacing = (h - 80) / (len(lights))
         
-        # Red light
-        if self.status == "ANOMALY":
-            painter.setBrush(QBrush(QColor("#ff0000")))
-            # Glow effect
-            for i in range(3):
-                painter.setOpacity(0.3 - i * 0.1)
-                painter.drawEllipse(center_x - light_radius - i*5, 
-                                    red_y - light_radius - i*5,
-                                    (light_radius + i*5) * 2,
-                                    (light_radius + i*5) * 2)
-            painter.setOpacity(1.0)
-        else:
-            painter.setBrush(QBrush(QColor("#330000")))
-        painter.drawEllipse(center_x - light_radius, red_y - light_radius,
-                           light_radius * 2, light_radius * 2)
-        
-        # Green light
-        if self.status == "NORMAL":
-            painter.setBrush(QBrush(QColor("#00ff88")))
-            # Glow effect
-            for i in range(3):
-                painter.setOpacity(0.3 - i * 0.1)
-                painter.drawEllipse(center_x - light_radius - i*5,
-                                    green_y - light_radius - i*5,
-                                    (light_radius + i*5) * 2,
-                                    (light_radius + i*5) * 2)
-            painter.setOpacity(1.0)
-        else:
-            painter.setBrush(QBrush(QColor("#003300")))
-        painter.drawEllipse(center_x - light_radius, green_y - light_radius,
-                           light_radius * 2, light_radius * 2)
+        for i, level in enumerate(lights):
+            light_y = int(50 + spacing * i + spacing / 2)
+            colors = self.SEVERITY_COLORS[level]
+            
+            if self.status == level:
+                # Active glow
+                painter.setBrush(QBrush(QColor(colors['active'])))
+                for g in range(3):
+                    painter.setOpacity(0.3 - g * 0.1)
+                    painter.drawEllipse(
+                        center_x - light_radius - g*4,
+                        light_y - light_radius - g*4,
+                        (light_radius + g*4) * 2,
+                        (light_radius + g*4) * 2
+                    )
+                painter.setOpacity(1.0)
+            else:
+                painter.setBrush(QBrush(QColor(colors['dim'])))
+            
+            painter.drawEllipse(
+                center_x - light_radius, light_y - light_radius,
+                light_radius * 2, light_radius * 2
+            )
         
         # Status text
         painter.setPen(QColor("#ffffff"))
@@ -592,6 +624,8 @@ class GroundControlStation(QMainWindow):
             ("TEMPERATURE", "temp_value", "---"),
             ("VIBRATION RMS", "rms_value", "0.000 g"),
             ("RMS THRESHOLD", "rms_th_value", "---"),
+            ("SEVERITY", "severity_value", "NORMAL"),
+            ("FAULT BAND", "band_value", "---"),
             ("ANOMALIES", "anomalies_value", "0"),
             ("ANOMALY RATE", "rate_value", "0.0%"),
         ]
@@ -733,9 +767,11 @@ class GroundControlStation(QMainWindow):
         # Parse the line
         parsed = LogParser.parse_line(line)
         
-        # Log the raw line
+        # Log the raw line with severity-based coloring
+        severity = parsed.get('severity', 'NORMAL')
         if parsed['is_anomaly'] is True:
-            self._log_message(line.strip(), Config.COLOR_WARNING)
+            sev_colors = {'CRITICAL': '#ff0000', 'WARNING': '#ff8800', 'WATCH': '#ffdd00'}
+            self._log_message(line.strip(), sev_colors.get(severity, Config.COLOR_WARNING))
         elif parsed['mse'] is not None:
             self._log_message(line.strip(), Config.COLOR_ACCENT)
         else:
@@ -752,12 +788,15 @@ class GroundControlStation(QMainWindow):
                 parsed['mse'], rms, temp,
                 parsed['is_anomaly'], anomaly_source,
                 mse_th, rms_th,
-                parsed.get('calibrating', False)
+                parsed.get('calibrating', False),
+                severity,
+                parsed.get('dominant_band')
             )
             
     def _update_sensor_data(self, mse: float, rms: float, temp: float, is_anomaly: bool, 
                             anomaly_source: str, mse_th: float, rms_th: float,
-                            calibrating: bool):
+                            calibrating: bool, severity: str = 'NORMAL',
+                            dominant_band: str = None):
         """Update dual-sensor data and metrics."""
         current_time = time.time() - self.start_time
         
@@ -808,22 +847,42 @@ class GroundControlStation(QMainWindow):
         if temp > 0:
             self.temp_value.setText(f"{temp:.1f}°C")
             self.temp_value.setStyleSheet(f"color: {Config.COLOR_ACCENT};")
+        
+        # Update UI - Severity
+        sev_colors = {
+            'NORMAL': Config.COLOR_ACCENT,
+            'WATCH': '#ffdd00',
+            'WARNING': '#ff8800',
+            'CRITICAL': '#ff0000'
+        }
+        self.severity_value.setText(severity)
+        self.severity_value.setStyleSheet(f"color: {sev_colors.get(severity, Config.COLOR_ACCENT)};")
+        
+        # Update UI - Fault Band
+        if dominant_band and is_anomaly:
+            self.band_value.setText(dominant_band)
+            self.band_value.setStyleSheet(f"color: {Config.COLOR_WARNING};")
+        elif dominant_band:
+            self.band_value.setText(dominant_band)
+            self.band_value.setStyleSheet(f"color: {Config.COLOR_TEXT_DIM};")
             
         self.anomalies_value.setText(str(self.anomaly_count))
         
         rate = (self.anomaly_count / self.total_samples * 100) if self.total_samples > 0 else 0
         self.rate_value.setText(f"{rate:.1f}%")
         
-        # Update traffic light and status
+        # Update traffic light with severity-based status
         if calibrating:
             self.traffic_light.set_status("IDLE")
             self.status_label.setText("⏳ CALIBRATING...")
             self.status_label.setStyleSheet(f"color: #ffaa00;")
         elif is_anomaly:
-            self.traffic_light.set_status("ANOMALY")
-            source_text = f"🚨 ANOMALY [{anomaly_source}]" if anomaly_source else "🚨 ANOMALY"
+            self.traffic_light.set_status(severity)  # WATCH, WARNING, or CRITICAL
+            sev_emoji = {'WATCH': '⚠️', 'WARNING': '🟠', 'CRITICAL': '🚨'}
+            emoji = sev_emoji.get(severity, '🚨')
+            source_text = f"{emoji} {severity} [{anomaly_source}]" if anomaly_source else f"{emoji} {severity}"
             self.status_label.setText(source_text)
-            self.status_label.setStyleSheet(f"color: {Config.COLOR_WARNING};")
+            self.status_label.setStyleSheet(f"color: {sev_colors.get(severity, Config.COLOR_WARNING)};")
         else:
             self.traffic_light.set_status("NORMAL")
             self.status_label.setText("SYSTEM NOMINAL")
@@ -883,6 +942,10 @@ class GroundControlStation(QMainWindow):
         self.mse_th_value.setText("---")
         self.rms_value.setText("0.000 g")
         self.rms_th_value.setText("---")
+        self.severity_value.setText("NORMAL")
+        self.severity_value.setStyleSheet(f"color: {Config.COLOR_ACCENT};")
+        self.band_value.setText("---")
+        self.band_value.setStyleSheet(f"color: {Config.COLOR_TEXT_DIM};")
         self.anomalies_value.setText("0")
         self.rate_value.setText("0.0%")
         self.log_console.clear()
