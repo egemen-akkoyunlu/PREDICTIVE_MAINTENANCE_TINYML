@@ -14,6 +14,8 @@ A self-calibrating, unsupervised anomaly detection system for rotating machinery
 *   **Self-Calibration:** Automatically learns the baseline noise/vibration floor of the specific machine it is attached to.
 *   **Privacy & Offline:** No cloud dependency. All processing happens locally.
 *   **Black Box Logging:** Records anomaly events to an SD card for post-mortem analysis.
+*   **Relay Protection:** Automatically activates a relay (GPIO 27) on CRITICAL severity to shut down machinery.
+*   **Anomaly Rate Alerting:** Triggers relay if anomaly rate exceeds 30% over a sustained period.
 
 ## 🛠️ Hardware Requirements
 
@@ -21,6 +23,7 @@ A self-calibrating, unsupervised anomaly detection system for rotating machinery
 *   **Audio Sensor:** INMP441 I2S Omnidirectional Microphone
 *   **Vibration Sensor:** MPU6050 Accelerometer/Gyroscope
 *   **Storage (Optional):** MicroSD Card Module (SPI)
+*   **Relay (Optional):** JQC3F 05VDC-C Relay Module (for automatic machine shutdown)
 *   **Indicator:** Built-in LED or external LED
 
 ### Pin Configuration
@@ -38,6 +41,9 @@ A self-calibrating, unsupervised anomaly detection system for rotating machinery
 | | MISO | 19 |
 | **Misc** | LED | 2 |
 | | Calibrate Button | 0 (BOOT) |
+| **Relay** | IN (signal) | 27 |
+| | VCC | 5V (VIN) |
+| | GND | GND |
 
 ### ⚡ Important Wiring Notes
 *   **SD Card Stability:** The SD card can draw high peak currents. Place a **10µF - 100µF capacitor** between the SD Card's **VCC and GND** pins, as close to the card reader as possible.
@@ -79,6 +85,9 @@ A self-calibrating, unsupervised anomaly detection system for rotating machinery
 
         > **Note:** Band analysis is most effective on machines with rich harmonic content (motors, pumps, gearboxes). Simple disturbances like tapping or shaking concentrate energy in the LOW band regardless of the source. The feature differentiates between **types of machine faults**, not types of manual impacts.
 
+    *   **Relay Control:** Activates relay on GPIO 27 when severity reaches CRITICAL, enabling automatic machine shutdown or external alarm triggering.
+    *   **Anomaly Rate Alerting:** Monitors the ratio of anomalous readings. If the anomaly rate exceeds **30%** over the last 20 readings, the relay is activated and a `RATE ALERT` is logged.
+
 *   **Drivers & Utilities:**
     *   **`i2s_microphone.hpp`:** Handles I2S DMA communication to read high-quality audio from the INMP441.
     *   **`mpu6050_watchdog.hpp`:** Manages I2C communication with the accelerometer, providing vibration data and **temperature readings**.
@@ -107,6 +116,11 @@ Normal: MSE=0.0487 (th=0.0587) | RMS=0.176g (th=0.479g) | Temp=25.3C | SEV=NORMA
 WATCH [AUDIO] MSE=0.0694 (th=0.0587) | RMS=0.168g (th=0.479g) | Temp=25.6C | SEV=WATCH | BAND=LOW
 WARNING [BOTH] MSE=0.0631 (th=0.0587) | RMS=0.945g (th=0.479g) | Temp=25.3C | SEV=WARNING | BAND=LOW
 CRITICAL [VIBRATION] MSE=0.0544 (th=0.0587) | RMS=2.129g (th=0.479g) | Temp=25.4C | SEV=CRITICAL | BAND=LOW
+
+# Relay and rate alerts
+RELAY ACTIVATED — CRITICAL anomaly detected!
+RATE ALERT: Anomaly rate 32.5% exceeds 30% threshold!
+RELAY ACTIVATED — sustained high anomaly rate!
 ```
 
 ## 📦 Installation & Usage
@@ -152,6 +166,8 @@ graph TD
     D -->|RMS vs Threshold| G
     G -->|Fault Confirmed| H{Severity Classification}
     H -->|WATCH / WARNING / CRITICAL| I[Alert + LED + SD Log]
+    H -->|CRITICAL| R[Relay Activation]
+    I -->|Rate > 30%| R
     K -->|LOW / MID / HIGH / ULTRA| I
     T --> I
 ```
