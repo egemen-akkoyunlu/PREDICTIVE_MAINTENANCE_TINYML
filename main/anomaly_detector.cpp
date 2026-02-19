@@ -51,6 +51,8 @@ namespace config {
     // GPIO Configuration
     constexpr gpio_num_t LED_ANOMALY_PIN = GPIO_NUM_2;       // Built-in LED
     constexpr gpio_num_t CALIBRATE_BUTTON_PIN = GPIO_NUM_0;  // BOOT button for recalibration
+    constexpr gpio_num_t RELAY_PIN = GPIO_NUM_27;            // Relay module control (HIGH = active)
+    constexpr bool ENABLE_RELAY = true;                      // Set false to disable relay
     
     // I2S Microphone Pins (INMP441)
     constexpr gpio_num_t I2S_BCK_PIN = GPIO_NUM_33;
@@ -126,6 +128,12 @@ namespace config {
     constexpr float SEVERITY_WATCH_MULT = 1.0f;    // threshold × 1.0 = WATCH
     constexpr float SEVERITY_WARNING_MULT = 1.5f;  // threshold × 1.5 = WARNING
     constexpr float SEVERITY_CRITICAL_MULT = 2.0f; // threshold × 2.0 = CRITICAL
+    
+    // =========================================================================
+    // ANOMALY RATE ALERTING
+    // =========================================================================
+    
+    constexpr float ANOMALY_RATE_ALERT_THRESHOLD = 30.0f;  // Alert if >30% anomaly rate
 
 } // namespace config
 
@@ -453,6 +461,17 @@ static esp_err_t initGPIO() {
         gpio_set_level(config::LED_ANOMALY_PIN, 0);
     }
     
+    // Configure relay output pin (default OFF)
+    if (config::ENABLE_RELAY) {
+        io_conf.mode = GPIO_MODE_OUTPUT;
+        io_conf.pin_bit_mask = (1ULL << config::RELAY_PIN);
+        io_conf.pull_down_en = GPIO_PULLDOWN_ENABLE;  // Keep relay OFF on boot
+        io_conf.pull_up_en = GPIO_PULLUP_DISABLE;
+        gpio_config(&io_conf);
+        gpio_set_level(config::RELAY_PIN, 0);
+        ESP_LOGI(TAG, "Relay configured on GPIO %d", config::RELAY_PIN);
+    }
+    
     // Configure BOOT button as input with pull-up for recalibration
     io_conf.mode = GPIO_MODE_INPUT;
     io_conf.pin_bit_mask = (1ULL << config::CALIBRATE_BUTTON_PIN);
@@ -770,12 +789,22 @@ static void anomalyDetectionTask(void* pvParameters) {
                 }
                 
                 gpio_set_level(config::LED_ANOMALY_PIN, 1);
+                
+                // Relay: activate on CRITICAL severity
+                if (config::ENABLE_RELAY && overall_sev == SeverityLevel::CRITICAL) {
+                    gpio_set_level(config::RELAY_PIN, 1);
+                    ESP_LOGE(TAG, "RELAY ACTIVATED — CRITICAL anomaly detected!");
+                }
             } else {
                 if (g_anomaly_detected) {
                     uint32_t elapsed = (xTaskGetTickCount() - g_anomaly_time) * portTICK_PERIOD_MS;
                     if (elapsed > config::ANOMALY_LED_DURATION_MS) {
                         gpio_set_level(config::LED_ANOMALY_PIN, 0);
                         g_anomaly_detected = false;
+                        // Deactivate relay when anomaly clears
+                        if (config::ENABLE_RELAY) {
+                            gpio_set_level(config::RELAY_PIN, 0);
+                        }
                     }
                 }
                 
@@ -790,6 +819,16 @@ static void anomalyDetectionTask(void* pvParameters) {
                 float rate = 100.0f * g_anomaly_count / g_detection_count;
                 ESP_LOGI(TAG, "Stats: %d detections, %d anomalies (%.1f%%)",
                          g_detection_count, g_anomaly_count, rate);
+                
+                // Anomaly rate alerting
+                if (rate > config::ANOMALY_RATE_ALERT_THRESHOLD) {
+                    ESP_LOGE(TAG, "RATE ALERT: Anomaly rate %.1f%% exceeds %.0f%% threshold!",
+                             rate, config::ANOMALY_RATE_ALERT_THRESHOLD);
+                    if (config::ENABLE_RELAY) {
+                        gpio_set_level(config::RELAY_PIN, 1);
+                        ESP_LOGE(TAG, "RELAY ACTIVATED — sustained high anomaly rate!");
+                    }
+                }
             }
         } else {
             ESP_LOGW(TAG, "No calibration - press BOOT button for 3s or restart");
