@@ -92,7 +92,7 @@ A self-calibrating, unsupervised anomaly detection system for rotating machinery
     *   **`i2s_microphone.hpp`:** Handles I2S DMA communication to read high-quality audio from the INMP441.
     *   **`mpu6050_watchdog.hpp`:** Manages I2C communication with the accelerometer, providing vibration data and **temperature readings**.
     *   **`sd_card_logger.hpp`:** Implements a localized "Black Box" to save CSV logs of anomaly events to an SD card.
-    *   **`deep_sleep_manager.hpp`:** Optimizes power consumption by putting the ESP32 into deep sleep when the machine is idle.
+    *   **`deep_sleep_manager.hpp`:** *(Future infrastructure — not currently active.)* Planned for battery-powered deployments: puts the ESP32 into deep sleep between readings, waking on MPU6050 motion interrupt (GPIO 4).
 *   **Calibration (`anomaly_detector.cpp`):**
     *   Runs for ~90 seconds on first startup.
     *   Saves baseline stats to **NVS Flash**.
