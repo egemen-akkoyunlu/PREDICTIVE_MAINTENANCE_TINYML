@@ -85,3 +85,6 @@ dependencies.lock
 sdkconfig.ci
 pytest_hello_world.py
 docs/
+
+# Dataset files (too large for git)
+data/

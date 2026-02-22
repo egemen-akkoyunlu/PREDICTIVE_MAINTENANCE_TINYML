@@ -472,7 +472,7 @@ alignas(8) const uint8_t model_data[] = {{
         hex_values = ', '.join(f'0x{b:02x}' for b in chunk)
         c_code += f"    {hex_values},\n"
     
-    c_code += """}};
+    c_code += """};
 
 #endif // MODEL_DATA_H
 """
